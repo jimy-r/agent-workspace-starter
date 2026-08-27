@@ -1,0 +1,22 @@
+# Paths the agent must never write to.
+#
+# One substring per line. Matching is case-insensitive, after normalising
+# backslashes to forward slashes — so an entry matches anywhere it appears
+# in a target path. Lines starting with '#' and blank lines are ignored.
+#
+# Both PreToolUse hooks read this file:
+#   .claude/hooks/protect_files.py       (Edit/Write tool calls)
+#   .claude/hooks/check_bash_command.py  (shell-level writes: >, rm, mv, sed -i, ...)
+#
+# If this file is missing, the hooks fall back to the same defaults listed below.
+
+.env
+credentials
+secrets
+.key
+.pem
+
+# Add your own, e.g.:
+# finance/records
+# health/
+# my-project/production-config.yaml
