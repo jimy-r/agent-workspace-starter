@@ -46,6 +46,8 @@ No build step, no dependencies beyond Python 3.8+ on PATH (for the optional hook
 
 That loop is the smallest version of the governance patterns documented in the reference repo — see [PATTERNS.md](https://github.com/jimy-r/agent-workspace-architecture/blob/main/PATTERNS.md?utm_source=github&utm_medium=repo&utm_campaign=agent-workspace-starter) for the full set (scheduled agents, review queues, audits, memory hygiene) and what each one costs.
 
+If you'd rather build than read, [`docs/tutorial.md`](docs/tutorial.md) walks this exact loop in seven checked steps.
+
 ## The hooks, honestly
 
 The two guards are **mistake-catchers, not security boundaries**. They block the casual failure modes — an agent redirecting output over your `.env`, a well-meaning force-push — by string-matching tool calls before they run. A determined process writing files from inside Python is out of scope. They fail open: a bug in a hook will never brick your session.
