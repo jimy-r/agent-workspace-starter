@@ -24,6 +24,8 @@ Open `CLAUDE.md` and replace every placeholder: who you are, what this workspace
 
 ## 3. Run the loop once
 
+If you have not read [Before your first session](before-your-first-session.md), do it now. It explains why the loop starts with `orient` and ends with `wrap` and then `/clear`, and it will save you the classic first-week mistakes.
+
 Give it a real small task. Say `add to tasks: <something you actually need done>`, then ask the agent to plan and do it, then say `wrap`.
 
 **Check:** `tasks/notes.md` gained and struck the item, `tasks/todo.md` carries the plan with its boxes ticked, and the wrap updated both — the session's work is in files, not just chat scrollback.
