@@ -20,6 +20,8 @@ claude
 #    "wrap"          → close-out ritual when a task finishes
 ```
 
+**New to how agent context works?** Read [docs/before-your-first-session.md](docs/before-your-first-session.md) first: what the model can see, why long sessions drift, and the five habits the loop below assumes. Five minutes.
+
 No build step, no dependencies beyond Python 3.8+ on PATH (for the optional hooks — delete the `hooks` block in `.claude/settings.json` if you don't want them).
 
 ## What's inside
