@@ -69,7 +69,7 @@ Two known sharp edges, inherited from real use: the bash guard matches command *
 
 James Ross. I design agent workspaces and AI-orchestration systems; this template is extracted from the workspace I run daily, published in full (redacted) at [agent-workspace-architecture](https://github.com/jimy-r/agent-workspace-architecture?utm_source=github&utm_medium=repo&utm_campaign=agent-workspace-starter). If you're standing up something similar inside an organisation, the practice site is **[jamesross.ai](https://jamesross.ai)**.
 
-Maintained best-effort as a curated artifact: no roadmap, no SLA. Issues for real defects welcome.
+Maintained best-effort as a curated artifact: no roadmap, no SLA. Issues for real defects welcome; [CONTRIBUTING.md](CONTRIBUTING.md) says what counts as one and the [bug report form](../../issues/new?template=bug_report.yml) is the intake.
 
 ## License
 

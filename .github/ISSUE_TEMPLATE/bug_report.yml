@@ -1,0 +1,49 @@
+name: Bug report
+description: Something in the template does not work as shipped.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Only defects in the template itself belong here. Once a copy is customised it is your own workspace and this repo has no view into it. Bugs in Claude Code go to [anthropics/claude-code](https://github.com/anthropics/claude-code). See [CONTRIBUTING.md](https://github.com/jimy-r/agent-workspace-starter/blob/main/CONTRIBUTING.md) for what is in scope.
+  - type: input
+    id: copied-from
+    attributes:
+      label: Which state of the template did you copy?
+      description: The commit SHA or the date your copy was made. `git log --reverse --format='%h %ad' | head -1` in your copy gives it.
+      placeholder: "e.g. 83fc3e6, or 2026-09-05"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What did you do?
+      description: The steps on a fresh copy, including the exact command or the phrase you said to Claude Code.
+      placeholder: |
+        1. gh repo create my-workspace --template jimy-r/agent-workspace-starter --private --clone
+        2. claude
+        3. said "orient"
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What did you expect, and what happened instead?
+      description: Paste the error or the hook output if there was one.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: OS and Python version
+      description: The two hooks are the only part with a dependency. `python --version`.
+      placeholder: "e.g. Windows 11, Python 3.12.4"
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: I searched the open issues for a near-duplicate.
+          required: true
+        - label: This reproduces on a fresh copy of the template, not only in my customised workspace.
