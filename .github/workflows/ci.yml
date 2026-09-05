@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  redaction:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0 # added-lines mode needs the base branch's history
+
+      - uses: jimy-r/redaction-check-action@v1
+
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+
+      - name: Validate .claude/settings.json
+        run: python -m json.tool .claude/settings.json > /dev/null
+
+      - name: Validate every JSON file under .claude/
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' f; do
+            echo "Checking $f"
+            python -m json.tool "$f" > /dev/null
+          done < <(find .claude -name '*.json' -print0)
+
+      - name: Compile-check every hook script under .claude/hooks/
+        run: |
+          set -euo pipefail
+          for f in .claude/hooks/*.py; do
+            echo "Compiling $f"
+            python -c "import py_compile, sys; py_compile.compile(sys.argv[1], doraise=True)" "$f"
+          done
