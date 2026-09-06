@@ -11,6 +11,12 @@ Stop rediscovering the integration checklist every time a task finishes. `wrap` 
 
 **If the task added, renamed, or removed something that lives in a registry, the registry must be updated in the same turn.** A shortcut without a row in the Command shortcuts table is invisible next session. No exceptions.
 
+## Shape: six linear steps, on purpose
+
+The reference workspace splits this ritual into three phases (the main thread writes a close-out brief, an execution-tier subagent applies it, the main thread reviews the result) because its close-out had grown to about twenty steps run at the session's peak context, where each one re-sends the whole transcript.
+
+This template keeps the linear form deliberately. At six steps the split costs more than it saves: a dispatch adds two main-thread turns of its own, for review and for the report that comes back. Reach for the split when your own close-out has grown past roughly a dozen steps and you can measure what it costs; the reference version is at [agent-workspace-architecture](https://github.com/jimy-r/agent-workspace-architecture/blob/main/samples/.claude/skills/wrap/SKILL.md).
+
 ## Procedure
 
 ### 1. Summarize what was done
