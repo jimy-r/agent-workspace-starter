@@ -11,6 +11,10 @@ permissions:
 
 jobs:
   redaction:
+    # added-lines mode diffs against the pull request's base branch. A push to
+    # main has no base ref, so the gate runs on pull requests only, which is
+    # the action's own guidance. validate still runs on every push.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
