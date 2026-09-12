@@ -22,7 +22,7 @@ claude
 
 **New to how agent context works?** Read [docs/before-your-first-session.md](docs/before-your-first-session.md) first: what the model can see, why long sessions drift, and the five habits the loop below assumes. Five minutes.
 
-No build step, no dependencies beyond Python 3.8+ on PATH (for the optional hooks — delete the `hooks` block in `.claude/settings.json` if you don't want them).
+No build step, no dependencies beyond Python 3.12+ on PATH (for the optional hooks; delete the `hooks` block in `.claude/settings.json` if you don't want them). 3.12 is what CI compile-checks the hooks against, so it is the floor this template actually tests. Older interpreters may well run them, untested.
 
 ## What's inside
 

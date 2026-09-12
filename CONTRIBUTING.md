@@ -8,7 +8,7 @@ This is a template repository. Every copy made with "Use this template" is indep
 
 - A defect in the template as shipped: a hook that crashes, a skill that references a file the template does not contain, a broken link, an instruction in `CLAUDE.md` that contradicts another one.
 - A step in [`docs/tutorial.md`](docs/tutorial.md) or [`docs/before-your-first-session.md`](docs/before-your-first-session.md) that does not work as written on a fresh copy.
-- Something that breaks under the only dependency the template claims, Python 3.8+ on PATH.
+- Something that breaks under the only dependency the template claims, Python 3.12+ on PATH, which is the version CI compile-checks the hooks against.
 
 ## Out of scope
 
