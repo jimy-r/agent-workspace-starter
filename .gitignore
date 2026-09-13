@@ -4,8 +4,12 @@ __pycache__/
 Thumbs.db
 .env
 .env.*
+# Secrets floor (portfolio-wide convention; audit 2026-09-12)
 *.key
 *.pem
-credentials*
-secrets*
+*.pfx
+*credentials*
+*secrets*
+local.settings.json
+*.publishsettings
 .claude/settings.local.json

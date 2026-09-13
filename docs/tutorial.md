@@ -2,7 +2,7 @@
 
 Hands-on companion to the [learn track](https://github.com/jimy-r/agent-workspace-architecture/tree/main/learn?utm_source=github&utm_medium=repo&utm_campaign=starter-tutorial) in the reference repo. That track explains *why*; this one has you *build*. Each step ends with a check you can verify before moving on. Total time: about an hour, most of it in steps 5–7.
 
-Prerequisites: [Claude Code](https://claude.com/claude-code), Python 3.8+ on PATH (for the optional hooks), and `gh` if you scaffold from the CLI.
+Prerequisites: [Claude Code](https://claude.com/claude-code), Python 3.12+ on PATH (for the optional hooks; 3.12 is what CI tests them on), and `gh` if you scaffold from the CLI.
 
 ## 1. Scaffold from the template
 
