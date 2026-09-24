@@ -24,6 +24,8 @@ claude
 
 No build step, no dependencies beyond Python 3.12+ on PATH (for the optional hooks; delete the `hooks` block in `.claude/settings.json` if you don't want them). 3.12 is what CI compile-checks the hooks against, so it is the floor this template actually tests. Older interpreters may well run them, untested.
 
+The hooks call `python3`, the name macOS and most Linux distributions ship. On Windows the interpreter is usually `python` or `py`, so change `"command": "python3"` to one of those in both hook entries in `.claude/settings.json`.
+
 ## What's inside
 
 | Path | What it does |
