@@ -13,5 +13,7 @@ first; it is the same content Claude Code loads automatically. Humans start at
 [`README.md`](README.md), contributors at [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 Before you commit, run what CI runs: `python -m json.tool` over every JSON file
-under `.claude/`, and a `py_compile` pass over each hook in `.claude/hooks/`.
+under `.claude/`, a `py_compile` pass over each hook in `.claude/hooks/`, and
+the hook payload check (each hook, run as `.claude/settings.json` wires it, must
+exit 2 on a known-bad payload and 0 on a benign one).
 Python 3.12 is the version CI uses.

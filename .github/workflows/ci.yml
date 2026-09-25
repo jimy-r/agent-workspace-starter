@@ -50,3 +50,65 @@ jobs:
             echo "Compiling $f"
             python -c "import py_compile, sys; py_compile.compile(sys.argv[1], doraise=True)" "$f"
           done
+
+      - name: Run each hook as settings.json wires it, on bad and benign payloads
+        # Runs from a directory other than the project root, as a hook does after
+        # the agent has cd'd, so a cwd-relative script path fails here. A hook
+        # that cannot start exits non-zero but not 2, which Claude Code treats as
+        # a non-blocking error and lets the tool call through. Asserting exactly
+        # 2 on the bad payloads catches that fail-open.
+        env:
+          CLAUDE_PROJECT_DIR: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          python3 - "$CLAUDE_PROJECT_DIR/.claude/settings.json" <<'EOF'
+          import json
+          import os
+          import subprocess
+          import sys
+
+          root = os.environ["CLAUDE_PROJECT_DIR"]
+          with open(sys.argv[1], encoding="utf-8") as fh:
+              settings = json.load(fh)
+
+          cases = {
+              "Edit|Write": {
+                  2: [{"tool_name": "Write", "tool_input": {"file_path": ".env"}}],
+                  0: [{"tool_name": "Write", "tool_input": {"file_path": "docs/notes.md"}}],
+              },
+              "Bash": {
+                  2: [
+                      {"tool_name": "Bash", "tool_input": {"command": "echo KEY=1 > .env"}},
+                      {"tool_name": "Bash", "tool_input": {"command": "git push --force origin feature"}},
+                  ],
+                  0: [{"tool_name": "Bash", "tool_input": {"command": "ls -la docs"}}],
+              },
+          }
+
+          failures = []
+          for group in settings["hooks"]["PreToolUse"]:
+              for hook in group["hooks"]:
+                  timeout = hook.get("timeout", 600)
+                  if timeout > 60:
+                      failures.append(f"{group['matcher']}: timeout {timeout} is seconds, not ms")
+                  argv = [hook["command"]] + [
+                      a.replace("${CLAUDE_PROJECT_DIR}", root) for a in hook.get("args", [])
+                  ]
+                  for want, payloads in cases[group["matcher"]].items():
+                      for payload in payloads:
+                          try:
+                              got = subprocess.run(
+                                  argv, input=json.dumps(payload), text=True,
+                                  capture_output=True, timeout=timeout,
+                              ).returncode
+                          except OSError as exc:
+                              got = f"could not start ({exc})"
+                          status = "ok" if got == want else "FAIL"
+                          print(f"{status}: {argv} <- {payload['tool_input']}: exit {got}, want {want}")
+                          if got != want:
+                              failures.append(f"{group['matcher']}: {payload['tool_input']}")
+
+          if failures:
+              sys.exit("hook check failed: " + "; ".join(failures))
+          EOF
