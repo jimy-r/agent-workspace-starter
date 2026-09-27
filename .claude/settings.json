@@ -6,8 +6,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python .claude/hooks/protect_files.py",
-            "timeout": 5000
+            "command": "python3",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/protect_files.py"],
+            "timeout": 5
           }
         ]
       },
@@ -16,8 +17,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python .claude/hooks/check_bash_command.py",
-            "timeout": 5000
+            "command": "python3",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/check_bash_command.py"],
+            "timeout": 5
           }
         ]
       }

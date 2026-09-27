@@ -11,14 +11,19 @@ This is the runnable companion to **[agent-workspace-architecture](https://githu
 gh repo create my-workspace --template jimy-r/agent-workspace-starter --private --clone
 cd my-workspace
 
-# 2. Open Claude Code
+# 2. Confirm the hooks can find their interpreter. This must print 1.
+python3 -c "print(1)"
+
+# 3. Open Claude Code
 claude
 
-# 3. Say:
+# 4. Say:
 #    "orient"        → briefing on workspace state + recommended next action
 #    "add to tasks: <thing>"  → captured in tasks/notes.md
 #    "wrap"          → close-out ritual when a task finishes
 ```
+
+If step 2 prints anything else, both guards stay off. The hooks are wired to `python3` in `.claude/settings.json`, the name macOS and most Linux distributions ship, and Claude Code treats a hook it can't start as a non-blocking error, so the tool call goes through and at most you see a notice. On Windows, the Python Install Manager and the Microsoft Store build provide `python3`. The python.org installer and conda provide only `python` and `py`. Change `"command": "python3"` to `"python"` or `"py"` in both hook entries, then re-run step 2 with the name you chose.
 
 **New to how agent context works?** Read [docs/before-your-first-session.md](docs/before-your-first-session.md) first: what the model can see, why long sessions drift, and the five habits the loop below assumes. Five minutes.
 
@@ -52,7 +57,7 @@ If you'd rather build than read, [`docs/tutorial.md`](docs/tutorial.md) walks th
 
 ## The hooks, honestly
 
-The two guards are **mistake-catchers, not security boundaries**. They block the casual failure modes — an agent redirecting output over your `.env`, a well-meaning force-push — by string-matching tool calls before they run. A determined process writing files from inside Python is out of scope. They fail open: a bug in a hook will never brick your session.
+The two guards are **mistake-catchers, not security boundaries**. They block the casual failure modes — an agent redirecting output over your `.env`, a well-meaning force-push — by string-matching tool calls before they run. A determined process writing files from inside Python is out of scope. They fail open: a bug in a hook will never brick your session. A missing interpreter fails open the same way, which is why step 2 of the Quickstart exists.
 
 Declare what's off-limits in `.claude/protected-paths.txt` (one substring per line). Both hooks read it; sensible defaults apply if it's missing.
 
