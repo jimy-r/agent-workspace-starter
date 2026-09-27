@@ -21,7 +21,14 @@ jobs:
         with:
           fetch-depth: 0 # added-lines mode needs the base branch's history
 
-      - uses: jimy-r/redaction-check-action@v1
+      # Pinned to the commit behind v1.0.1 rather than the v1 tag. The action's
+      # release workflow moves v1 to each new release, so a tag reference runs
+      # whatever the tag points at on the day CI runs. A full commit SHA can't
+      # move, so the code that runs is the code someone reviewed, and a repo
+      # generated from this template starts from the same fixed pin.
+      # Dependabot (.github/dependabot.yml) still proposes upgrades, as PRs
+      # that bump the SHA and this version comment together.
+      - uses: jimy-r/redaction-check-action@5d0367ec0a56da7568b61201dedde744867e6eb9 # v1.0.1
 
   validate:
     runs-on: ubuntu-latest
