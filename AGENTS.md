@@ -12,8 +12,12 @@ or personal ever belongs in a file.
 first; it is the same content Claude Code loads automatically. Humans start at
 [`README.md`](README.md), contributors at [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-Before you commit, run what CI runs: `python -m json.tool` over every JSON file
-under `.claude/`, a `py_compile` pass over each hook in `.claude/hooks/`, and
-the hook payload check (each hook, run as `.claude/settings.json` wires it, must
-exit 2 on a known-bad payload and 0 on a benign one).
-Python 3.12 is the version CI uses.
+Before you commit, run what CI runs locally: `python -m json.tool` over every
+JSON file under `.claude/`, and a `py_compile` pass over each hook in
+`.claude/hooks/`. Python 3.12 is the version CI uses.
+
+CI also runs each hook exactly as `.claude/settings.json` wires it, from a
+directory outside the repo, and asserts exit 2 on a known-bad payload and 0 on
+a benign one. That check is an inline script in the last `validate` step of
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml), so there is no local
+command to run. It runs in CI on every pull request and push to main.
