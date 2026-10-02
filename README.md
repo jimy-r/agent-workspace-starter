@@ -61,7 +61,7 @@ The two guards are **mistake-catchers, not security boundaries**. They block the
 
 Declare what's off-limits in `.claude/protected-paths.txt` (one substring per line). Both hooks read it; sensible defaults apply if it's missing.
 
-Two known sharp edges, inherited from real use: the bash guard matches command *text*, so a commit message containing "push" near "main" can false-positive (run commit and push as separate commands), and any path containing a protected substring is blocked even in quoted strings. Loosen the list rather than fighting it.
+Two known sharp edges, inherited from real use: the bash guard checks quoted strings as commands too, so a commit message that itself reads as a blocked command (`git push origin main`) is refused, and any path containing a protected substring is blocked even in quoted strings. Reword the message or loosen the list rather than fighting it.
 
 ## Customising
 
