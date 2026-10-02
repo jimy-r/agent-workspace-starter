@@ -25,6 +25,8 @@ claude
 
 If step 2 prints anything else, both guards stay off. The hooks are wired to `python3` in `.claude/settings.json`, the name macOS and most Linux distributions ship, and Claude Code treats a hook it can't start as a non-blocking error, so the tool call goes through and at most you see a notice. On Windows, the Python Install Manager and the Microsoft Store build provide `python3`. The python.org installer and conda provide only `python` and `py`. Change `"command": "python3"` to `"python"` or `"py"` in both hook entries, then re-run step 2 with the name you chose.
 
+Your copy also inherits the files that maintain this template's own repository. Delete or replace `AGENTS.md`, `SECURITY.md`, `CONTRIBUTING.md` and `.github/ISSUE_TEMPLATE/`, since each one is written about this template. Keeping `.github/workflows/ci.yml` and `.github/dependabot.yml` is optional. The workflow checks that both hooks still block what they should and, on pull requests, runs a redaction scan, which earns its place if your copy is public. Dependabot proposes updates to the workflow's pinned actions, so keep or delete the two together.
+
 **New to how agent context works?** Read [docs/before-your-first-session.md](docs/before-your-first-session.md) first: what the model can see, why long sessions drift, and the five habits the loop below assumes. Five minutes.
 
 No build step, no dependencies beyond Python 3.12+ on PATH (for the optional hooks; delete the `hooks` block in `.claude/settings.json` if you don't want them). 3.12 is what CI compile-checks the hooks against, so it is the floor this template actually tests. Older interpreters may well run them, untested.
