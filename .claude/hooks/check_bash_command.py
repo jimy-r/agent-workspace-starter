@@ -1,43 +1,59 @@
 """
-PreToolUse Bash hook -- close the Bash gap in Edit/Write file protection
+PreToolUse shell hook -- close the shell gap in Edit/Write file protection
 and block dangerous git operations.
 
 The Edit/Write hook (protect_files.py) gates direct file-tool calls
 against the protected-path list, but shell-level filesystem operations
-(`mv`, `cp`, `sed -i`, `rm`, output redirection `>` / `>>`) bypass it
-because they arrive through the `Bash` tool. This hook covers that gap.
+(`mv`, `cp`, `sed -i`, `rm`, output redirection `>` / `>>`, PowerShell's
+`Remove-Item` / `Set-Content` / `Out-File`) bypass it because they arrive
+through the `Bash` or `PowerShell` tool. This hook covers that gap. Both
+tools send the command as `tool_input.command`, so one script serves both.
 
 It refuses two categories of command:
 
-    1. File writes to protected paths -- any write-intent verb (`>` /
-       `>>` / `rm` / `mv <dest>` / `cp <dest>` / `sed -i` / `tee` /
-       `touch` / `chmod` / `chown` / `truncate`) whose target contains a
+    1. File writes to protected paths -- a write whose target contains a
        protected substring (case-insensitive, normalised to forward
        slashes). The list comes from `.claude/protected-paths.txt`,
        shared with protect_files.py; DEFAULTS apply if it's missing.
+       Two layers find the targets:
+         - text patterns: `>` / `>>` / `2>`, `cp <dest>`, `sed -i`,
+           `tee`, `touch`, `chmod`, `chown`, `truncate`;
+         - parsed commands (shlex): every operand of `rm` and `mv` (a
+           protected file moved away is gone from its path, so the `mv`
+           source counts as a write), `git rm` / `git mv`, and the
+           PowerShell write cmdlets with their aliases: Remove-Item (ri,
+           del, erase, rd, rmdir), Move-Item (mi, move), Rename-Item
+           (rni, ren), Copy-Item (cpi, copy; destination only),
+           Set-Content (sc), Add-Content (ac), Clear-Content (clc),
+           Out-File, New-Item (ni), Tee-Object.
 
-    2. Dangerous git operations -- `git push` targeting `main` or
-       `master`, any force push, `git reset --hard` against main/master.
+    2. Dangerous git operations -- any force push (`-f`, `--force*`,
+       `+refspec`), a push whose destination is `main` or `master`
+       (`origin main`, `HEAD:main`, `refs/heads/main`, `feature:main`,
+       `:main`, `--all`, `--mirror`, or a bare `git push` / `git push
+       origin` while the current branch is main or master), and
+       `git reset --hard` against main/master. `git -C <dir>` is followed.
 
 This is *defence-in-depth*, not paranoia. The bar is "catch casual
 mistakes," not "stop a determined adversary." Processes that open files
 internally (`open(path, 'w')`) are out of scope -- the hook can't
 inspect process behaviour.
 
-Known sharp edge: the hook matches command TEXT, not parsed intent. A
-commit message containing "main" near a `git push` in the same command
-string can false-positive. Run `git commit` and `git push` as separate
-commands rather than bypassing the hook.
+Known sharp edge: quoted arguments are checked as commands too, so
+`bash -c "rm .env"` is caught. The cost is that a commit message which
+itself reads as a blocked command (`-m "git push origin main"`) is
+refused. Reword the message rather than bypassing the hook.
 
 Claude Code hook protocol:
-    - stdin: JSON payload {"tool_name": "Bash", "tool_input": {"command": "..."}}
+    - stdin: JSON payload {"tool_name": "Bash" | "PowerShell",
+      "tool_input": {"command": "..."}, "cwd": "..."}
     - exit 0: allow
     - exit 2: block (stderr message is surfaced to the agent; JSON on
       stdout with {"decision": "block", "reason": "..."} is the
       structured form)
 
 If the hook script itself errors, it fails open (exit 0, no block) so a
-bug here does NOT brick the agent's ability to run Bash.
+bug here does NOT brick the agent's ability to run shell commands.
 """
 
 from __future__ import annotations
@@ -45,6 +61,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
+import subprocess
 import sys
 
 DEFAULTS: list[str] = [
@@ -75,9 +93,10 @@ def load_protected() -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Write-intent patterns. Each captures the target path as group(2).
+# Write-intent text patterns. Each captures the target path as group(2).
 # The path token is terminated by whitespace, pipe, semicolon, ampersand,
 # or end of string. Single and double quotes optionally wrap the target.
+# rm and mv are parsed instead (below), because a pattern sees one operand.
 # ---------------------------------------------------------------------------
 
 _PATH = r"(['\"]?)([^\s'\"|&;<>]+)\1"
@@ -86,8 +105,6 @@ WRITE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(rf"(?<![2&])>\s*{_PATH}"), "shell redirection '>'"),
     (re.compile(rf">>\s*{_PATH}"), "shell append '>>'"),
     (re.compile(rf"2>\s*{_PATH}"), "stderr redirection '2>'"),
-    (re.compile(rf"\brm\s+(?:-[rRfv]+\s+)*{_PATH}"), "rm"),
-    (re.compile(rf"\bmv\s+\S+\s+{_PATH}"), "mv (destination)"),
     (re.compile(rf"\bcp\s+(?:-\S+\s+)*\S+\s+{_PATH}"), "cp (destination)"),
     (re.compile(rf"\bsed\s+-i\S*\s+.+?\s+{_PATH}"), "sed -i (in-place edit)"),
     (re.compile(rf"\btee\s+(?:-[aA]\s+)?{_PATH}"), "tee"),
@@ -97,57 +114,260 @@ WRITE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(rf"\btruncate\s+\S+\s+{_PATH}"), "truncate"),
 ]
 
-# ---------------------------------------------------------------------------
-# Dangerous git operations -- blocked regardless of target path.
-# ---------------------------------------------------------------------------
-
 DANGEROUS_GIT: list[tuple[re.Pattern[str], str]] = [
-    (
-        re.compile(r"\bgit\s+push\s+(?:\S+\s+)*(?:origin\s+)?main(?:\s|:|$)"),
-        "git push to 'main' is forbidden -- use a feature branch + PR",
-    ),
-    (
-        re.compile(r"\bgit\s+push\s+(?:\S+\s+)*(?:origin\s+)?master(?:\s|:|$)"),
-        "git push to 'master' is forbidden -- use a feature branch + PR",
-    ),
-    (
-        re.compile(
-            r"\bgit\s+push\s+(?:\S+\s+)*(?:-f\b|--force\b|--force-with-lease\b)"
-        ),
-        "git force-push is forbidden",
-    ),
     (
         re.compile(r"\bgit\s+reset\s+--hard\s+(?:origin/)?(?:main|master)\b"),
         "git reset --hard on main/master is forbidden",
     ),
 ]
 
+# ---------------------------------------------------------------------------
+# Parsed commands. Names are matched lower-case, without a directory or a
+# trailing .exe, so `Remove-Item`, `remove-item` and `/bin/rm` all resolve.
+# ---------------------------------------------------------------------------
+
+# Every operand is a target: delete, move or rename, and the content cmdlets.
+REMOVE = {"rm", "remove-item", "ri", "del", "erase", "rd", "rmdir"}
+MOVE = {"mv", "move-item", "mi", "move", "rename-item", "rni", "ren"}
+CONTENT = {"set-content", "sc", "add-content", "ac", "clear-content", "clc"}
+CREATE = {"out-file", "new-item", "ni", "tee-object"}
+ALL_OPERANDS = REMOVE | MOVE | CONTENT | CREATE
+DESTINATION_ONLY = {"cp", "copy-item", "cpi", "copy"}
+CONTENT_PARAMS = {"-value", "-inputobject"}  # file content, not a path
+WRAPPERS = {"sudo", "env", "command", "exec", "nohup", "time", "nice", "xargs"}
+GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
+PUSH_VALUE_OPTS = {"-o", "--push-option", "--receive-pack", "--exec"}
+PROTECTED_BRANCHES = {"main", "master"}
+_SEPARATOR = set(";&|()")
+_REDIRECT = set("<>&")
+
 
 def _normalise_target(target: str) -> str:
     return target.replace("\\", "/").lower()
 
 
+def _protected_reason(verb: str, target: str, protected: list[str]) -> str:
+    normalised = _normalise_target(target)
+    for entry in protected:
+        if entry in normalised:
+            return (
+                f"{verb} targets protected path '{target}' "
+                f"(matches '{entry}' in .claude/protected-paths.txt). "
+                f"If legitimate, narrow the entry deliberately -- "
+                f"don't bypass the hook."
+            )
+    return ""
+
+
 def check_protected_writes(command: str, protected: list[str]) -> tuple[bool, str]:
-    """Return (blocked, reason) if the command writes to a protected path."""
+    """Return (blocked, reason) if a text pattern writes to a protected path."""
     for pattern, verb in WRITE_PATTERNS:
         for match in pattern.finditer(command):
-            normalised = _normalise_target(match.group(2))
-            for entry in protected:
-                if entry in normalised:
-                    return True, (
-                        f"{verb} targets protected path '{match.group(2)}' "
-                        f"(matches '{entry}' in .claude/protected-paths.txt). "
-                        f"If legitimate, narrow the entry deliberately -- "
-                        f"don't bypass the hook."
-                    )
+            reason = _protected_reason(verb, match.group(2), protected)
+            if reason:
+                return True, reason
     return False, ""
 
 
 def check_dangerous_git(command: str) -> tuple[bool, str]:
-    """Return (blocked, reason) if the command is a dangerous git op."""
+    """Return (blocked, reason) if the command matches a git text pattern."""
     for pattern, reason in DANGEROUS_GIT:
         if pattern.search(command):
             return True, reason
+    return False, ""
+
+
+def _tokens(command: str) -> list[str]:
+    lex = shlex.shlex(command.replace("\n", " ; "), posix=True, punctuation_chars=True)
+    lex.whitespace_split = True
+    lex.escape = ""  # backslash is a path separator on Windows, keep it
+    try:
+        return list(lex)
+    except ValueError:  # unbalanced quote: fall back to a plain split
+        return [t.strip("'\"") for t in re.findall(r"[;&|()]+|[^\s;&|()]+", command)]
+
+
+def _segments(command: str, depth: int = 0):
+    """Yield each simple command as a token list. A quoted argument that
+    holds whitespace (`bash -c "..."`, `pwsh -Command "..."`) is checked as
+    a command of its own as well."""
+    current: list[str] = []
+    for tok in _tokens(command):
+        if set(tok) <= _SEPARATOR:
+            if current:
+                yield current
+            current = []
+            continue
+        if set(tok) <= _REDIRECT:
+            continue
+        if depth < 3 and any(c.isspace() for c in tok):
+            yield from _segments(tok, depth + 1)
+        current.append(tok)
+    if current:
+        yield current
+
+
+def _name(token: str) -> str:
+    base = token.lstrip("`").replace("\\", "/").rsplit("/", 1)[-1].lower()
+    return base.removesuffix(".exe")
+
+
+def _command(tokens: list[str]) -> tuple[str, list[str]]:
+    """Skip wrappers (sudo, env, xargs...), their flags and VAR=value
+    assignments; return the command name and its arguments."""
+    for i, tok in enumerate(tokens):
+        if (
+            _name(tok) in WRAPPERS
+            or tok.startswith("-")
+            or re.match(r"[A-Za-z_]\w*=", tok)
+        ):
+            continue
+        return _name(tok), tokens[i + 1 :]
+    return "", []
+
+
+def _split_flag(tok: str) -> tuple[str, str | None]:
+    """`--flag=value` and PowerShell `-Param:value` carry their value inline."""
+    match = re.match(r"(-[^=:]*)[=:](.+)", tok)
+    return (match.group(1).lower(), match.group(2)) if match else (tok.lower(), None)
+
+
+def _operands(
+    args: list[str], content_params: frozenset[str] | set[str] = frozenset()
+) -> list[str]:
+    """Every argument that could be a path: non-flag tokens plus inline flag
+    values. The token after a content parameter (`-Value`) is skipped."""
+    out: list[str] = []
+    skip = after_dashdash = False
+    for tok in args:
+        if skip:
+            skip = False
+        elif after_dashdash or not tok.startswith("-") or tok == "-":
+            out.append(tok)
+        elif tok == "--":
+            after_dashdash = True
+        else:
+            flag, value = _split_flag(tok)
+            if flag in content_params:
+                skip = value is None
+            elif value is not None:
+                out.append(value)
+    return out
+
+
+def _copy_destination(args: list[str]) -> list[str]:
+    for i, tok in enumerate(args):
+        flag, value = _split_flag(tok)
+        is_dest = flag in ("-t", "--target-directory") or (
+            len(flag) >= 4 and "-destination".startswith(flag)
+        )
+        if tok.startswith("-") and is_dest:
+            return [value] if value is not None else args[i + 1 : i + 2]
+    positional = _operands(args)
+    return positional[-1:] if len(positional) > 1 else []
+
+
+def _write_targets(name: str, args: list[str]) -> list[str]:
+    if name in ALL_OPERANDS:
+        return _operands(args, CONTENT_PARAMS)
+    if name in DESTINATION_ONLY:
+        return _copy_destination(args)
+    return []
+
+
+def _current_branch(cwd: str) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "-C", cwd, "symbolic-ref", "--short", "-q", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return result.stdout.strip()
+
+
+def _git(args: list[str], cwd: str) -> tuple[str, list[str], str]:
+    """Split git's global options from its subcommand, following every -C."""
+    i = 0
+    while i < len(args) and args[i].startswith("-"):
+        if args[i] == "-C" and i + 1 < len(args):
+            cwd = os.path.join(cwd, args[i + 1])
+        i += 2 if args[i] in GIT_VALUE_OPTS else 1
+    if i >= len(args):
+        return "", [], cwd
+    return args[i], args[i + 1 :], cwd
+
+
+def check_push(args: list[str], cwd: str) -> tuple[bool, str]:
+    """Return (blocked, reason) for a force push or a push that lands on
+    main/master. A push with no refspec sends the current branch."""
+    positional: list[str] = []
+    force = every_branch = tags = repo_flag = False
+    skip = False
+    for tok in args:
+        if skip:
+            skip = False
+        elif not tok.startswith("-"):
+            positional.append(tok)
+            force = force or tok.startswith("+")
+        elif tok.startswith("--force") or re.fullmatch(r"-\w*f\w*", tok):
+            force = True
+        elif tok in ("--all", "--mirror", "--branches"):
+            every_branch = True
+        elif tok == "--tags":
+            tags = True
+        elif tok.startswith("--repo"):
+            repo_flag = True
+            skip = "=" not in tok
+        elif tok in PUSH_VALUE_OPTS:
+            skip = True
+
+    if force:
+        return True, "git force-push is forbidden"
+    if every_branch:
+        return (
+            True,
+            "git push --all/--mirror includes main/master -- push one feature branch",
+        )
+
+    refspecs = positional if repo_flag else positional[1:]
+    if not refspecs and not tags:
+        refspecs = ["HEAD"]
+    for spec in refspecs:
+        dest = spec.lstrip("+").rsplit(":", 1)[-1]
+        if dest in ("HEAD", "@"):
+            dest = _current_branch(cwd)
+        dest = dest.removeprefix("refs/heads/")
+        if dest in PROTECTED_BRANCHES:
+            return (
+                True,
+                f"git push to '{dest}' is forbidden -- use a feature branch + PR",
+            )
+    return False, ""
+
+
+def check_parsed(command: str, protected: list[str], cwd: str) -> tuple[bool, str]:
+    """Return (blocked, reason) from the shlex-parsed commands."""
+    for tokens in _segments(command):
+        name, args = _command(tokens)
+        label = tokens[len(tokens) - len(args) - 1]
+        if name == "git":
+            sub, args, git_cwd = _git(args, cwd)
+            if sub == "push":
+                blocked, reason = check_push(args, git_cwd)
+                if blocked:
+                    return True, reason
+                continue
+            if sub not in ("rm", "mv") or (sub == "rm" and "--cached" in args):
+                continue
+            name, label = sub, f"git {sub}"
+        for target in _write_targets(name, args):
+            reason = _protected_reason(label, target, protected)
+            if reason:
+                return True, reason
     return False, ""
 
 
@@ -160,8 +380,12 @@ def main() -> int:
     command = payload.get("tool_input", {}).get("command", "")
     if not isinstance(command, str) or not command:
         return 0
+    cwd = payload.get("cwd") or os.getcwd()
 
-    blocked, reason = check_protected_writes(command, load_protected())
+    protected = load_protected()
+    blocked, reason = check_protected_writes(command, protected)
+    if not blocked:
+        blocked, reason = check_parsed(command, protected, cwd)
     if not blocked:
         blocked, reason = check_dangerous_git(command)
 

@@ -63,7 +63,9 @@ jobs:
         # the agent has cd'd, so a cwd-relative script path fails here. A hook
         # that cannot start exits non-zero but not 2, which Claude Code treats as
         # a non-blocking error and lets the tool call through. Asserting exactly
-        # 2 on the bad payloads catches that fail-open.
+        # 2 on the bad payloads catches that fail-open. Each payload goes to the
+        # hooks whose matcher names its tool, as Claude Code routes it, so a tool
+        # no matcher covers (PowerShell on Windows, say) fails here too.
         env:
           CLAUDE_PROJECT_DIR: ${{ github.workspace }}
         run: |
@@ -72,49 +74,86 @@ jobs:
           python3 - "$CLAUDE_PROJECT_DIR/.claude/settings.json" <<'EOF'
           import json
           import os
+          import re
           import subprocess
           import sys
+          import tempfile
 
           root = os.environ["CLAUDE_PROJECT_DIR"]
           with open(sys.argv[1], encoding="utf-8") as fh:
               settings = json.load(fh)
 
+          # A bare `git push` sends the current branch, which the guard reads
+          # from git. One scratch repo sits on main and one on a feature branch.
+          repo = {}
+          for branch in ("main", "feature"):
+              repo[branch] = tempfile.mkdtemp()
+              subprocess.run(["git", "init", "-q", "-b", branch, repo[branch]], check=True)
+
+          def shell(command, tool="Bash"):
+              return {"tool_name": tool, "tool_input": {"command": command}}
+
           cases = {
-              "Edit|Write": {
-                  2: [{"tool_name": "Write", "tool_input": {"file_path": ".env"}}],
-                  0: [{"tool_name": "Write", "tool_input": {"file_path": "docs/notes.md"}}],
-              },
-              "Bash": {
-                  2: [
-                      {"tool_name": "Bash", "tool_input": {"command": "echo KEY=1 > .env"}},
-                      {"tool_name": "Bash", "tool_input": {"command": "git push --force origin feature"}},
-                  ],
-                  0: [{"tool_name": "Bash", "tool_input": {"command": "ls -la docs"}}],
-              },
+              2: [
+                  {"tool_name": "Write", "tool_input": {"file_path": ".env"}},
+                  shell("echo KEY=1 > .env"),
+                  shell("git push --force origin feature"),
+                  shell("rm -f old.log .env"),
+                  shell("mv .env backup.txt"),
+                  shell(f'git -C "{repo["main"]}" push'),
+                  shell("git push origin HEAD:main"),
+                  shell("git push origin +main"),
+                  shell("git push origin refs/heads/main"),
+                  shell("git push origin feature:main"),
+                  shell("git -C some/dir push origin main"),
+                  shell("Remove-Item -Path .env -Force", "PowerShell"),
+              ],
+              0: [
+                  {"tool_name": "Write", "tool_input": {"file_path": "docs/notes.md"}},
+                  shell("ls -la docs"),
+                  shell("rm -f old.log build.log"),
+                  shell(f'git -C "{repo["feature"]}" push'),
+                  shell("git push origin main:feature"),
+                  shell("Get-ChildItem docs", "PowerShell"),
+              ],
           }
 
+          def run(hook, payload):
+              argv = [hook["command"]] + [
+                  a.replace("${CLAUDE_PROJECT_DIR}", root) for a in hook.get("args", [])
+              ]
+              try:
+                  return subprocess.run(
+                      argv, input=json.dumps(payload), text=True,
+                      capture_output=True, timeout=hook.get("timeout", 600),
+                  ).returncode
+              except OSError as exc:
+                  return f"could not start ({exc})"
+
           failures = []
-          for group in settings["hooks"]["PreToolUse"]:
+          groups = settings["hooks"]["PreToolUse"]
+          for group in groups:
               for hook in group["hooks"]:
                   timeout = hook.get("timeout", 600)
                   if timeout > 60:
                       failures.append(f"{group['matcher']}: timeout {timeout} is seconds, not ms")
-                  argv = [hook["command"]] + [
-                      a.replace("${CLAUDE_PROJECT_DIR}", root) for a in hook.get("args", [])
+
+          for want, payloads in cases.items():
+              for payload in payloads:
+                  tool = payload["tool_name"]
+                  hooks = [
+                      hook for group in groups if re.fullmatch(group["matcher"], tool)
+                      for hook in group["hooks"]
                   ]
-                  for want, payloads in cases[group["matcher"]].items():
-                      for payload in payloads:
-                          try:
-                              got = subprocess.run(
-                                  argv, input=json.dumps(payload), text=True,
-                                  capture_output=True, timeout=timeout,
-                              ).returncode
-                          except OSError as exc:
-                              got = f"could not start ({exc})"
-                          status = "ok" if got == want else "FAIL"
-                          print(f"{status}: {argv} <- {payload['tool_input']}: exit {got}, want {want}")
-                          if got != want:
-                              failures.append(f"{group['matcher']}: {payload['tool_input']}")
+                  if not hooks:
+                      print(f"FAIL: no PreToolUse matcher covers the {tool} tool")
+                      failures.append(f"{tool}: no matcher")
+                      continue
+                  got = [run(hook, payload) for hook in hooks]
+                  ok = 2 in got if want == 2 else all(code == 0 for code in got)
+                  print(f"{'ok' if ok else 'FAIL'}: {tool} {payload['tool_input']}: exit {got}, want {want}")
+                  if not ok:
+                      failures.append(f"{tool}: {payload['tool_input']}")
 
           if failures:
               sys.exit("hook check failed: " + "; ".join(failures))

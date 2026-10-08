@@ -16,7 +16,7 @@
 
 ## Self-improvement loop
 
-- After any user correction, append a rule to `tasks/lessons.md` **before** continuing other work. Format: `## YYYY-MM-DD — Short title`, what went wrong, the rule to follow.
+- After any user correction, prepend a rule to `tasks/lessons.md` **before** continuing other work. Format: `## YYYY-MM-DD — Short title`, what went wrong, the rule to follow.
 - At session start, read `tasks/lessons.md` and apply its rules for the duration of the session.
 
 ## Task management
