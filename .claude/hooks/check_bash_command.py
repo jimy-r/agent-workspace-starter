@@ -34,6 +34,23 @@ It refuses two categories of command:
        origin` while the current branch is main or master), and
        `git reset --hard` against main/master. `git -C <dir>` is followed.
 
+Where a command sits in a statement does not change the answer. A shell
+keyword in front of it is skipped (`if ...; then rm x; fi`, `do rm x`,
+`! rm x`). Each statement inside braces is checked on its own (`{ rm x; }`,
+`if ($ok) { Remove-Item x }`). Comment text is kept as part of the
+command, because a comment line must not hide the command below it. Each
+statement is read again without its trailing comment, because a note must
+not soften the command in front of it. The whole command is read twice
+more. Once with each line cut at a `#` that opens a word outside quotes,
+because a quote mark inside a comment would otherwise count as a quote.
+And once as only the text in front of the first such `#`, because a line
+further down that leaves a quote open must not change how that text
+reads. A quoted script is read with its comments cut out as well. A line
+continued with a trailing backslash (Bash) or backtick (PowerShell) is
+read again with the lines joined. A quoted target is read to its closing
+quote, so
+`> "my secrets/out.txt"` is seen whole.
+
 This is *defence-in-depth*, not paranoia. The bar is "catch casual
 mistakes," not "stop a determined adversary." Processes that open files
 internally (`open(path, 'w')`) are out of scope -- the hook can't
@@ -42,7 +59,14 @@ inspect process behaviour.
 Known sharp edge: quoted arguments are checked as commands too, so
 `bash -c "rm .env"` is caught. The cost is that a commit message which
 itself reads as a blocked command (`-m "git push origin main"`) is
-refused. Reword the message rather than bypassing the hook.
+refused. Reword the message rather than bypassing the hook. Text inside
+braces is read the same way, so a hashtable or JSON body whose key is
+named like a delete or a move and whose value is a protected path
+(`@{ del = '.env' }`) is refused as well. So is comment text: a note
+after a delete, a move or a push that names a protected path, `main` or
+a force flag (`rm old.log  # not .env`), and a comment that holds a
+blocked command of its own after a `;`, a `|` or a brace
+(`# cleanup; rm .env`).
 
 Claude Code hook protocol:
     - stdin: JSON payload {"tool_name": "Bash" | "PowerShell",
@@ -93,13 +117,14 @@ def load_protected() -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Write-intent text patterns. Each captures the target path as group(2).
-# The path token is terminated by whitespace, pipe, semicolon, ampersand,
-# or end of string. Single and double quotes optionally wrap the target.
+# Write-intent text patterns. Each captures the target path in whichever of
+# _PATH's three groups matched. A quoted target is read to its closing quote,
+# so a path with a space in it is seen whole. An unquoted one ends at
+# whitespace, pipe, semicolon, ampersand, a redirect or end of string.
 # rm and mv are parsed instead (below), because a pattern sees one operand.
 # ---------------------------------------------------------------------------
 
-_PATH = r"(['\"]?)([^\s'\"|&;<>]+)\1"
+_PATH = r"(?:\"([^\"]+)\"|'([^']+)'|([^\s'\"|&;<>]+))"
 
 WRITE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(rf"(?<![2&])>\s*{_PATH}"), "shell redirection '>'"),
@@ -135,6 +160,10 @@ ALL_OPERANDS = REMOVE | MOVE | CONTENT | CREATE
 DESTINATION_ONLY = {"cp", "copy-item", "cpi", "copy"}
 CONTENT_PARAMS = {"-value", "-inputobject"}  # file content, not a path
 WRAPPERS = {"sudo", "env", "command", "exec", "nohup", "time", "nice", "xargs"}
+# Shell keywords that sit in front of a command in the same statement
+# (`then rm x`, `do rm x`, `else rm x`, `if rm x`, `! rm x`). Skipped the way
+# wrappers are, so the command behind them is the one that gets checked.
+KEYWORDS = {"if", "then", "else", "elif", "do", "while", "until", "!"}
 GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
 PUSH_VALUE_OPTS = {"-o", "--push-option", "--receive-pack", "--exec"}
 PROTECTED_BRANCHES = {"main", "master"}
@@ -163,7 +192,8 @@ def check_protected_writes(command: str, protected: list[str]) -> tuple[bool, st
     """Return (blocked, reason) if a text pattern writes to a protected path."""
     for pattern, verb in WRITE_PATTERNS:
         for match in pattern.finditer(command):
-            reason = _protected_reason(verb, match.group(2), protected)
+            target = next(group for group in match.groups() if group is not None)
+            reason = _protected_reason(verb, target, protected)
             if reason:
                 return True, reason
     return False, ""
@@ -178,33 +208,139 @@ def check_dangerous_git(command: str) -> tuple[bool, str]:
 
 
 def _tokens(command: str) -> list[str]:
-    lex = shlex.shlex(command.replace("\n", " ; "), posix=True, punctuation_chars=True)
+    """Split a command into words and separators. A newline ends a statement.
+
+    Comments stay in. Left to itself the lexer drops everything from the
+    first unquoted `#` to the end of the text, which is every later line as
+    well once the newlines are separators, so a comment line above a command
+    would hide the command. `_statement` reads each statement a second time
+    without its trailing comment. A quote mark inside a comment counts as a
+    quote here, so `_readings` also sends the command through with its
+    comments cut out.
+
+    A quote left open makes the lexer give up, and the plain split that
+    takes over knows nothing about quotes. A command inside them is then
+    no longer read as a command of its own, on that line or on any other.
+    So `_readings` also sends the text in front of the first comment
+    through alone, where a later line cannot reach it.
+    """
+    text = command.replace("\n", " ; ")
+    lex = shlex.shlex(text, posix=True, punctuation_chars=True)
     lex.whitespace_split = True
     lex.escape = ""  # backslash is a path separator on Windows, keep it
+    lex.commenters = ""
     try:
         return list(lex)
     except ValueError:  # unbalanced quote: fall back to a plain split
-        return [t.strip("'\"") for t in re.findall(r"[;&|()]+|[^\s;&|()]+", command)]
+        return [t.strip("'\"") for t in re.findall(r"[;&|()]+|[^\s;&|()]+", text)]
+
+
+def _brace_parts(tok: str) -> list[str | None]:
+    """Split a token at each unbalanced brace. None marks where one stood.
+
+    `{` and `}` open and close a block in both shells (`{ rm x; }`,
+    `if ($ok) { Remove-Item x }`), and PowerShell lets them touch the words
+    inside (`{Remove-Item x}`). A balanced pair inside one token is something
+    else (`${HOME}`, `file{1,2}`, find's `{}`) and is left alone.
+    """
+    open_at: list[int] = []
+    lone: set[int] = set()
+    for i, char in enumerate(tok):
+        if char == "{":
+            open_at.append(i)
+        elif char == "}":
+            if open_at:
+                open_at.pop()
+            else:
+                lone.add(i)
+    lone.update(open_at)
+    if not lone:
+        return [tok]
+    parts: list[str | None] = []
+    piece = ""
+    for i, char in enumerate(tok):
+        if i in lone:
+            if piece:
+                parts.append(piece)
+            parts.append(None)
+            piece = ""
+        else:
+            piece += char
+    if piece:
+        parts.append(piece)
+    return parts
+
+
+def _blocks(tokens: list[str]):
+    """Yield each statement that follows a brace as a token list of its own.
+
+    The caller has already yielded `tokens` whole, so this only adds
+    readings and never takes one away: an operand such as `${X:-a b}/y`,
+    which splits into tokens with a lone brace each, is still checked as the
+    operand it is.
+    """
+    current: list[str] = []
+    inside = False
+    for tok in tokens:
+        for part in _brace_parts(tok):
+            if part is None:
+                if inside and current:
+                    yield current
+                current = []
+                inside = True
+            else:
+                current.append(part)
+    if inside and current:
+        yield current
+
+
+def _statement(tokens: list[str]):
+    """Yield one statement as written, then without its trailing comment.
+
+    Comment text is kept so that it cannot hide what follows it. Read that
+    way alone, though, a note could pass for arguments and soften the
+    command in front of it (`git rm x  # --cached`). A word that starts with
+    `#` opens a comment in both shells, so the statement is read a second
+    time cut short at that word. The whole statement is yielded first, so
+    this only adds readings: an operand that merely starts with a `#`
+    (`rm "#old" x`) keeps the operands after it.
+    """
+    yield tokens
+    yield from _blocks(tokens)
+    for i, tok in enumerate(tokens):
+        if tok.startswith("#"):
+            if i:
+                yield tokens[:i]
+                yield from _blocks(tokens[:i])
+            break
 
 
 def _segments(command: str, depth: int = 0):
     """Yield each simple command as a token list. A quoted argument that
     holds whitespace (`bash -c "..."`, `pwsh -Command "..."`) is checked as
-    a command of its own as well."""
+    a command of its own as well, and so is each statement inside braces.
+
+    A quoted script is read as written and then with its comments cut out,
+    for the reason `_readings` gives. Its newlines are separators by the
+    time it gets here, so a comment in it is cut to the end of the script
+    or to a carriage return. The script as written is read first, so the
+    cut only adds a reading.
+    """
     current: list[str] = []
     for tok in _tokens(command):
         if set(tok) <= _SEPARATOR:
             if current:
-                yield current
+                yield from _statement(current)
             current = []
             continue
         if set(tok) <= _REDIRECT:
             continue
         if depth < 3 and any(c.isspace() for c in tok):
-            yield from _segments(tok, depth + 1)
+            for text in dict.fromkeys((tok, _without_comments(tok, ""))):
+                yield from _segments(text, depth + 1)
         current.append(tok)
     if current:
-        yield current
+        yield from _statement(current)
 
 
 def _name(token: str) -> str:
@@ -213,11 +349,13 @@ def _name(token: str) -> str:
 
 
 def _command(tokens: list[str]) -> tuple[str, list[str]]:
-    """Skip wrappers (sudo, env, xargs...), their flags and VAR=value
-    assignments; return the command name and its arguments."""
+    """Skip shell keywords (then, do, else...), wrappers (sudo, env,
+    xargs...), their flags and VAR=value assignments; return the command
+    name and its arguments."""
     for i, tok in enumerate(tokens):
         if (
-            _name(tok) in WRAPPERS
+            tok.lower() in KEYWORDS
+            or _name(tok) in WRAPPERS
             or tok.startswith("-")
             or re.match(r"[A-Za-z_]\w*=", tok)
         ):
@@ -371,6 +509,83 @@ def check_parsed(command: str, protected: list[str], cwd: str) -> tuple[bool, st
     return False, ""
 
 
+# One quoted string, or one comment (the group), or a run of anything else. A
+# comment opens at a `#` that starts a word: at the start of a line, or after
+# whitespace, a separator, a redirect or a brace. It ends with its line.
+_COMMENT = r"'[^']*'?|\"[^\"]*\"?|((?<![^\s;&|()<>{}])#[^%s]*)|[^'\"#]+|#"
+_COMMENT_TO_NEWLINE = re.compile(_COMMENT % r"\n")
+_COMMENT_TO_LINE_END = re.compile(_COMMENT % r"\r\n")
+
+
+def _without_comments(command: str, tool: str) -> str:
+    """Cut each line at a `#` that opens a word outside quotes.
+
+    A word opens at the start of the text and after whitespace, a separator,
+    a redirect or a brace. PowerShell starts a comment in each of those
+    places. Bash does not start one after a brace, so `${#x}` is cut here
+    although Bash reads it as a length, and the rest of that line is then
+    missing from this reading. The reading is only ever added to the
+    others, so that takes no refusal away. It can add one: the index-only
+    `git rm .env.d/${#n} --cached` loses its `--cached` here and is
+    refused. A hash inside a word (`a#b`, a URL fragment) or inside quotes
+    stays. Quotes are followed the way `_tokens` follows them, with no
+    escape character, and a quoted string may run over several lines. Bash
+    ends a comment at a newline. PowerShell ends a line at a lone carriage
+    return as well, so every other tool gets the wider rule.
+    """
+    pattern = _COMMENT_TO_NEWLINE if tool == "Bash" else _COMMENT_TO_LINE_END
+    return pattern.sub(lambda m: "" if m.group(1) is not None else m.group(), command)
+
+
+def _head(command: str, tool: str) -> str:
+    """The text in front of the first comment, or all of it without one."""
+    pattern = _COMMENT_TO_NEWLINE if tool == "Bash" else _COMMENT_TO_LINE_END
+    for match in pattern.finditer(command):
+        if match.group(1) is not None:
+            return command[: match.start()]
+    return command
+
+
+def _readings(command: str, tool: str) -> list[str]:
+    """The command as sent, without its comments, and up to its first
+    comment, each with lines joined.
+
+    A newline ends a statement, so `rm -f \\` followed by `.env` on the next
+    line reads as two statements and the delete loses its operand. Bash
+    drops a backslash-newline and PowerShell reads a backtick-newline as a
+    space. The join is added beside the original and never replaces it, and
+    each shell gets only its own continuation character: a PowerShell path
+    that ends in a backslash must not swallow the line below it.
+
+    `_tokens` keeps comment text, and a quote mark in that text counts as a
+    quote. One apostrophe in a note leaves the quotes unbalanced, and the
+    plain split that follows no longer sees a command inside quotes. Two of
+    them, in comments above and below a command, pair with the command's
+    own quotes and pull it apart. So the command is read again with its
+    comments cut out, which is how the shell reads it. That reading gets its
+    own join, because a backslash at the end of a comment continues nothing.
+
+    A quote left open on a later line still takes every line to the plain
+    split, though Bash runs the lines above the broken one before it stops.
+    So the text in front of the first comment is read alone as well, and
+    nothing that follows it can change how it reads there. Without a
+    comment that reading is the command itself and adds nothing.
+
+    Every reading is checked, and any one of them can refuse.
+    """
+    readings = [command]
+    for text in (command, _without_comments(command, tool), _head(command, tool)):
+        joined = text
+        if tool != "PowerShell":
+            joined = re.sub(r"\\\r?\n", "", joined)
+        if tool != "Bash":
+            joined = re.sub(r"`\r?\n", " ", joined)
+        for reading in (text, joined):
+            if reading not in readings:
+                readings.append(reading)
+    return readings
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -381,13 +596,18 @@ def main() -> int:
     if not isinstance(command, str) or not command:
         return 0
     cwd = payload.get("cwd") or os.getcwd()
+    tool = payload.get("tool_name")
 
     protected = load_protected()
-    blocked, reason = check_protected_writes(command, protected)
-    if not blocked:
-        blocked, reason = check_parsed(command, protected, cwd)
-    if not blocked:
-        blocked, reason = check_dangerous_git(command)
+    blocked, reason = False, ""
+    for reading in _readings(command, tool if isinstance(tool, str) else ""):
+        blocked, reason = check_protected_writes(reading, protected)
+        if not blocked:
+            blocked, reason = check_parsed(reading, protected, cwd)
+        if not blocked:
+            blocked, reason = check_dangerous_git(reading)
+        if blocked:
+            break
 
     if blocked:
         print(json.dumps({"decision": "block", "reason": f"[bash-guard] {reason}"}))

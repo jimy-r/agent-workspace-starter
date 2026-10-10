@@ -107,6 +107,75 @@ jobs:
                   shell("git push origin feature:main"),
                   shell("git -C some/dir push origin main"),
                   shell("Remove-Item -Path .env -Force", "PowerShell"),
+                  # The command behind a shell keyword, inside braces, on a
+                  # continued line, or aimed at a quoted path with a space in it.
+                  shell("if [ -f .env ]; then rm .env; fi"),
+                  shell('for f in a b; do rm -f "$f" .env; done'),
+                  shell("if (Test-Path .env) { Remove-Item .env }", "PowerShell"),
+                  shell("if true; then git push --force origin feature; fi"),
+                  shell("rm -f \\\n  .env"),
+                  shell("Remove-Item `\n  -Path .env", "PowerShell"),
+                  shell('echo KEY=1 > "my secrets/out.txt"'),
+                  # A comment, a hash sign inside a word or an escaped quote in
+                  # front of a command outside quotes hides nothing, and a note
+                  # after a command does not soften it.
+                  shell("# tidy up\nrm .env"),
+                  shell("# ship it\ngit push origin main"),
+                  shell("git status  # check first\ngit push --force origin feature"),
+                  shell("echo issue#12; rm .env"),
+                  shell('echo "5\\" disk"\nrm .env'),
+                  shell("# remove the old file\nRemove-Item .env", "PowerShell"),
+                  shell("git rm .env  # --cached"),
+                  # A quote mark inside a comment. One in a note leaves the quotes
+                  # unbalanced, so a command inside quotes or behind a quoted value
+                  # goes unread unless the note is cut off first.
+                  shell('bash -c "rm .env"  # don\'t worry'),
+                  shell('sh -c \'rm .env\'  # 5" disk'),
+                  shell('bash -c "rm .env"\n# that\'s the old one'),
+                  shell('bash -c "git push origin main"  # don\'t wait'),
+                  shell('bash -c "git push --force origin feature"\n# it\'s fine'),
+                  shell('pwsh -Command "Remove-Item .env"  # don\'t keep', "PowerShell"),
+                  shell('powershell -Command "Remove-Item .env"\n# that\'s all', "PowerShell"),
+                  shell('git -C "my repo" push origin main  # don\'t wait'),
+                  shell('eval "rm .env"  # don\'t'),
+                  shell('bash -c "mv backup.txt .env"  # don\'t'),
+                  shell('bash -c "rm .env"\nls -la  # it\'s a check'),
+                  shell('git -c "user.name=A B" push origin main  # don\'t'),
+                  shell('sudo bash -c "rm .env"  # don\'t'),
+                  shell('bash -c "git rm .env"  # don\'t'),
+                  shell('FOO="a b" rm .env  # don\'t'),
+                  shell('env FOO="a b" rm .env  # don\'t'),
+                  shell('pwsh -Command \'Remove-Item .env\'  # 5" disk', "PowerShell"),
+                  # One in a comment above the command and one below pair with the
+                  # command's own quotes and pull its operands apart.
+                  shell("# don't keep the old copy\nrm 'old copy.txt' .env\n# that's all"),
+                  shell("# it's fine\nrm 'my file' .env  # don't worry"),
+                  shell('# say "hello\ncp "my file" .env\n# end "quote'),
+                  shell("# don't\nmv 'a b.txt' .env\n# it's ok"),
+                  shell("# don't lose it\nCopy-Item 'my notes.txt' .env\n# that's the config", "PowerShell"),
+                  shell("ls  # don't\nrm 'a b' .env\nls # it's"),
+                  shell("# don't keep these\nRemove-Item 'old copy.txt' .env\n# that's all", "PowerShell"),
+                  # Where a comment starts and ends is the shell's call. A hash sign
+                  # inside quotes earlier on the line is not one. A backslash at the
+                  # end of a comment continues nothing, so the delete below it is
+                  # still joined to its own next line. A comment can start straight
+                  # after a `;` or a `<`, and PowerShell ends one at a lone carriage
+                  # return.
+                  shell('git commit -m "fix #12" && bash -c "rm .env"  # don\'t worry'),
+                  shell('echo a # note \\\nrm -f \\\n  .env'),
+                  shell('bash -c "rm .env";# don\'t'),
+                  shell('pwsh -Command "Remove-Item .env" <# don\'t #>', "PowerShell"),
+                  shell('# note\rRemove-Item .env', "PowerShell"),
+                  # A line further down that leaves a quote open sends every line to a
+                  # split that does not follow quotes, and Bash has run the lines above
+                  # it by then. The text in front of the first comment is read alone,
+                  # so it stays out of reach. A quoted script has its comments cut out
+                  # as well.
+                  shell('bash -c "rm .env"  # note\necho it\'s done'),
+                  shell('bash -c "rm .env"\n# note\necho it\'s done'),
+                  shell('FOO="a b" rm .env  # note\necho "unfinished'),
+                  shell('bash -c "git push origin main"  # note\necho it\'s'),
+                  shell('bash -c "FOO=\'a b\' rm .env  # don\'t"'),
               ],
               0: [
                   {"tool_name": "Write", "tool_input": {"file_path": "docs/notes.md"}},
@@ -115,6 +184,31 @@ jobs:
                   shell(f'git -C "{repo["feature"]}" push'),
                   shell("git push origin main:feature"),
                   shell("Get-ChildItem docs", "PowerShell"),
+                  # The same shapes around files that are not protected. The
+                  # last one is two PowerShell statements: a path that ends in
+                  # a backslash does not continue onto the line below it.
+                  shell("if [ -f notes.md ]; then rm old.log; fi"),
+                  shell("if (Test-Path old.log) { Remove-Item old.log }", "PowerShell"),
+                  shell("rm -f \\\n  old.log"),
+                  shell('echo done > "my notes/out.txt"'),
+                  shell("Remove-Item C:\\temp\\\nGet-Content secrets-policy.md", "PowerShell"),
+                  # Ordinary commands that hold a hash sign.
+                  shell("# list the docs\nls -la docs"),
+                  shell("rm -f old.log  # tidy up"),
+                  shell("curl -s https://example.com/page#top"),
+                  shell('echo "issue #12 is fixed"'),
+                  shell('git commit -m "fix #12: tidy the notes"'),
+                  shell("# list the docs\nGet-ChildItem docs", "PowerShell"),
+                  # Harmless commands with a quote mark in a comment, an index-only
+                  # `git rm` with a hash sign inside a quoted name, and a Bash comment
+                  # that a lone carriage return does not end.
+                  shell("ls -la docs  # don't forget the notes"),
+                  shell("# don't run this yet\nls 'my docs'\n# that's all"),
+                  shell('git rm .env "x #1" --cached'),
+                  shell('Write-Host "it\'s done"  # don\'t worry', "PowerShell"),
+                  shell('# note\rrm .env'),
+                  # The first of those shapes with a harmless command inside the quotes.
+                  shell('bash -c "ls docs"  # note\necho it\'s done'),
               ],
           }
 
