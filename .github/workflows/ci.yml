@@ -107,6 +107,15 @@ jobs:
                   shell("git push origin feature:main"),
                   shell("git -C some/dir push origin main"),
                   shell("Remove-Item -Path .env -Force", "PowerShell"),
+                  # The command behind a shell keyword, inside braces, on a
+                  # continued line, or aimed at a quoted path with a space in it.
+                  shell("if [ -f .env ]; then rm .env; fi"),
+                  shell('for f in a b; do rm -f "$f" .env; done'),
+                  shell("if (Test-Path .env) { Remove-Item .env }", "PowerShell"),
+                  shell("if true; then git push --force origin feature; fi"),
+                  shell("rm -f \\\n  .env"),
+                  shell("Remove-Item `\n  -Path .env", "PowerShell"),
+                  shell('echo KEY=1 > "my secrets/out.txt"'),
               ],
               0: [
                   {"tool_name": "Write", "tool_input": {"file_path": "docs/notes.md"}},
@@ -115,6 +124,14 @@ jobs:
                   shell(f'git -C "{repo["feature"]}" push'),
                   shell("git push origin main:feature"),
                   shell("Get-ChildItem docs", "PowerShell"),
+                  # The same shapes around files that are not protected. The
+                  # last one is two PowerShell statements: a path that ends in
+                  # a backslash does not continue onto the line below it.
+                  shell("if [ -f notes.md ]; then rm old.log; fi"),
+                  shell("if (Test-Path old.log) { Remove-Item old.log }", "PowerShell"),
+                  shell("rm -f \\\n  old.log"),
+                  shell('echo done > "my notes/out.txt"'),
+                  shell("Remove-Item C:\\temp\\\nGet-Content secrets-policy.md", "PowerShell"),
               ],
           }
 

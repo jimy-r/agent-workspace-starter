@@ -34,6 +34,14 @@ It refuses two categories of command:
        origin` while the current branch is main or master), and
        `git reset --hard` against main/master. `git -C <dir>` is followed.
 
+Where a command sits in a statement does not change the answer. A shell
+keyword in front of it is skipped (`if ...; then rm x; fi`, `do rm x`,
+`! rm x`). Each statement inside braces is checked on its own (`{ rm x; }`,
+`if ($ok) { Remove-Item x }`). A line continued with a trailing backslash
+(Bash) or backtick (PowerShell) is read a second time with the lines
+joined. A quoted target is read to its closing quote, so
+`> "my secrets/out.txt"` is seen whole.
+
 This is *defence-in-depth*, not paranoia. The bar is "catch casual
 mistakes," not "stop a determined adversary." Processes that open files
 internally (`open(path, 'w')`) are out of scope -- the hook can't
@@ -42,7 +50,10 @@ inspect process behaviour.
 Known sharp edge: quoted arguments are checked as commands too, so
 `bash -c "rm .env"` is caught. The cost is that a commit message which
 itself reads as a blocked command (`-m "git push origin main"`) is
-refused. Reword the message rather than bypassing the hook.
+refused. Reword the message rather than bypassing the hook. Text inside
+braces is read the same way, so a hashtable or JSON body whose key is
+named like a delete or a move and whose value is a protected path
+(`@{ del = '.env' }`) is refused as well.
 
 Claude Code hook protocol:
     - stdin: JSON payload {"tool_name": "Bash" | "PowerShell",
@@ -93,13 +104,14 @@ def load_protected() -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Write-intent text patterns. Each captures the target path as group(2).
-# The path token is terminated by whitespace, pipe, semicolon, ampersand,
-# or end of string. Single and double quotes optionally wrap the target.
+# Write-intent text patterns. Each captures the target path in whichever of
+# _PATH's three groups matched. A quoted target is read to its closing quote,
+# so a path with a space in it is seen whole. An unquoted one ends at
+# whitespace, pipe, semicolon, ampersand, a redirect or end of string.
 # rm and mv are parsed instead (below), because a pattern sees one operand.
 # ---------------------------------------------------------------------------
 
-_PATH = r"(['\"]?)([^\s'\"|&;<>]+)\1"
+_PATH = r"(?:\"([^\"]+)\"|'([^']+)'|([^\s'\"|&;<>]+))"
 
 WRITE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(rf"(?<![2&])>\s*{_PATH}"), "shell redirection '>'"),
@@ -135,6 +147,10 @@ ALL_OPERANDS = REMOVE | MOVE | CONTENT | CREATE
 DESTINATION_ONLY = {"cp", "copy-item", "cpi", "copy"}
 CONTENT_PARAMS = {"-value", "-inputobject"}  # file content, not a path
 WRAPPERS = {"sudo", "env", "command", "exec", "nohup", "time", "nice", "xargs"}
+# Shell keywords that sit in front of a command in the same statement
+# (`then rm x`, `do rm x`, `else rm x`, `if rm x`, `! rm x`). Skipped the way
+# wrappers are, so the command behind them is the one that gets checked.
+KEYWORDS = {"if", "then", "else", "elif", "do", "while", "until", "!"}
 GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
 PUSH_VALUE_OPTS = {"-o", "--push-option", "--receive-pack", "--exec"}
 PROTECTED_BRANCHES = {"main", "master"}
@@ -163,7 +179,8 @@ def check_protected_writes(command: str, protected: list[str]) -> tuple[bool, st
     """Return (blocked, reason) if a text pattern writes to a protected path."""
     for pattern, verb in WRITE_PATTERNS:
         for match in pattern.finditer(command):
-            reason = _protected_reason(verb, match.group(2), protected)
+            target = next(group for group in match.groups() if group is not None)
+            reason = _protected_reason(verb, target, protected)
             if reason:
                 return True, reason
     return False, ""
@@ -187,15 +204,75 @@ def _tokens(command: str) -> list[str]:
         return [t.strip("'\"") for t in re.findall(r"[;&|()]+|[^\s;&|()]+", command)]
 
 
+def _brace_parts(tok: str) -> list[str | None]:
+    """Split a token at each unbalanced brace. None marks where one stood.
+
+    `{` and `}` open and close a block in both shells (`{ rm x; }`,
+    `if ($ok) { Remove-Item x }`), and PowerShell lets them touch the words
+    inside (`{Remove-Item x}`). A balanced pair inside one token is something
+    else (`${HOME}`, `file{1,2}`, find's `{}`) and is left alone.
+    """
+    open_at: list[int] = []
+    lone: set[int] = set()
+    for i, char in enumerate(tok):
+        if char == "{":
+            open_at.append(i)
+        elif char == "}":
+            if open_at:
+                open_at.pop()
+            else:
+                lone.add(i)
+    lone.update(open_at)
+    if not lone:
+        return [tok]
+    parts: list[str | None] = []
+    piece = ""
+    for i, char in enumerate(tok):
+        if i in lone:
+            if piece:
+                parts.append(piece)
+            parts.append(None)
+            piece = ""
+        else:
+            piece += char
+    if piece:
+        parts.append(piece)
+    return parts
+
+
+def _blocks(tokens: list[str]):
+    """Yield each statement that follows a brace as a token list of its own.
+
+    The caller has already yielded `tokens` whole, so this only adds
+    readings and never takes one away: an operand such as `${X:-a b}/y`,
+    which splits into tokens with a lone brace each, is still checked as the
+    operand it is.
+    """
+    current: list[str] = []
+    inside = False
+    for tok in tokens:
+        for part in _brace_parts(tok):
+            if part is None:
+                if inside and current:
+                    yield current
+                current = []
+                inside = True
+            else:
+                current.append(part)
+    if inside and current:
+        yield current
+
+
 def _segments(command: str, depth: int = 0):
     """Yield each simple command as a token list. A quoted argument that
     holds whitespace (`bash -c "..."`, `pwsh -Command "..."`) is checked as
-    a command of its own as well."""
+    a command of its own as well, and so is each statement inside braces."""
     current: list[str] = []
     for tok in _tokens(command):
         if set(tok) <= _SEPARATOR:
             if current:
                 yield current
+                yield from _blocks(current)
             current = []
             continue
         if set(tok) <= _REDIRECT:
@@ -205,6 +282,7 @@ def _segments(command: str, depth: int = 0):
         current.append(tok)
     if current:
         yield current
+        yield from _blocks(current)
 
 
 def _name(token: str) -> str:
@@ -213,11 +291,13 @@ def _name(token: str) -> str:
 
 
 def _command(tokens: list[str]) -> tuple[str, list[str]]:
-    """Skip wrappers (sudo, env, xargs...), their flags and VAR=value
-    assignments; return the command name and its arguments."""
+    """Skip shell keywords (then, do, else...), wrappers (sudo, env,
+    xargs...), their flags and VAR=value assignments; return the command
+    name and its arguments."""
     for i, tok in enumerate(tokens):
         if (
-            _name(tok) in WRAPPERS
+            tok.lower() in KEYWORDS
+            or _name(tok) in WRAPPERS
             or tok.startswith("-")
             or re.match(r"[A-Za-z_]\w*=", tok)
         ):
@@ -371,6 +451,24 @@ def check_parsed(command: str, protected: list[str], cwd: str) -> tuple[bool, st
     return False, ""
 
 
+def _readings(command: str, tool: str) -> list[str]:
+    """The command as sent, plus a second reading with continued lines joined.
+
+    A newline ends a statement, so `rm -f \\` followed by `.env` on the next
+    line reads as two statements and the delete loses its operand. Bash
+    drops a backslash-newline and PowerShell reads a backtick-newline as a
+    space. The join is added beside the original and never replaces it, and
+    each shell gets only its own continuation character: a PowerShell path
+    that ends in a backslash must not swallow the line below it.
+    """
+    joined = command
+    if tool != "PowerShell":
+        joined = re.sub(r"\\\r?\n", "", joined)
+    if tool != "Bash":
+        joined = re.sub(r"`\r?\n", " ", joined)
+    return [command] if joined == command else [command, joined]
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -381,13 +479,18 @@ def main() -> int:
     if not isinstance(command, str) or not command:
         return 0
     cwd = payload.get("cwd") or os.getcwd()
+    tool = payload.get("tool_name")
 
     protected = load_protected()
-    blocked, reason = check_protected_writes(command, protected)
-    if not blocked:
-        blocked, reason = check_parsed(command, protected, cwd)
-    if not blocked:
-        blocked, reason = check_dangerous_git(command)
+    blocked, reason = False, ""
+    for reading in _readings(command, tool if isinstance(tool, str) else ""):
+        blocked, reason = check_protected_writes(reading, protected)
+        if not blocked:
+            blocked, reason = check_parsed(reading, protected, cwd)
+        if not blocked:
+            blocked, reason = check_dangerous_git(reading)
+        if blocked:
+            break
 
     if blocked:
         print(json.dumps({"decision": "block", "reason": f"[bash-guard] {reason}"}))
