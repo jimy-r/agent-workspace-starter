@@ -116,6 +116,16 @@ jobs:
                   shell("rm -f \\\n  .env"),
                   shell("Remove-Item `\n  -Path .env", "PowerShell"),
                   shell('echo KEY=1 > "my secrets/out.txt"'),
+                  # A comment, a hash sign inside a word or an escaped quote in
+                  # front of the command hides nothing, and a note after a
+                  # command does not soften it.
+                  shell("# tidy up\nrm .env"),
+                  shell("# ship it\ngit push origin main"),
+                  shell("git status  # check first\ngit push --force origin feature"),
+                  shell("echo issue#12; rm .env"),
+                  shell('echo "5\\" disk"\nrm .env'),
+                  shell("# remove the old file\nRemove-Item .env", "PowerShell"),
+                  shell("git rm .env  # --cached"),
               ],
               0: [
                   {"tool_name": "Write", "tool_input": {"file_path": "docs/notes.md"}},
@@ -132,6 +142,13 @@ jobs:
                   shell("rm -f \\\n  old.log"),
                   shell('echo done > "my notes/out.txt"'),
                   shell("Remove-Item C:\\temp\\\nGet-Content secrets-policy.md", "PowerShell"),
+                  # Ordinary commands that hold a hash sign.
+                  shell("# list the docs\nls -la docs"),
+                  shell("rm -f old.log  # tidy up"),
+                  shell("curl -s https://example.com/page#top"),
+                  shell('echo "issue #12 is fixed"'),
+                  shell('git commit -m "fix #12: tidy the notes"'),
+                  shell("# list the docs\nGet-ChildItem docs", "PowerShell"),
               ],
           }
 
