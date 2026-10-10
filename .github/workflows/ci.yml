@@ -117,8 +117,8 @@ jobs:
                   shell("Remove-Item `\n  -Path .env", "PowerShell"),
                   shell('echo KEY=1 > "my secrets/out.txt"'),
                   # A comment, a hash sign inside a word or an escaped quote in
-                  # front of the command hides nothing, and a note after a
-                  # command does not soften it.
+                  # front of a command outside quotes hides nothing, and a note
+                  # after a command does not soften it.
                   shell("# tidy up\nrm .env"),
                   shell("# ship it\ngit push origin main"),
                   shell("git status  # check first\ngit push --force origin feature"),
