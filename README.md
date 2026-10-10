@@ -65,6 +65,8 @@ Declare what's off-limits in `.claude/protected-paths.txt` (one substring per li
 
 Three known sharp edges, inherited from real use. The bash guard checks quoted strings as commands too, so a commit message that itself reads as a blocked command (`git push origin main`) is refused. Any path containing a protected substring is blocked even in quoted strings. And text inside braces is read as a command, so a hashtable or JSON body whose key is named like a delete or a move (`@{ del = '.env' }`) is refused when its value is a protected path. Reword the message, rename the key or loosen the list rather than fighting it.
 
+Your copy doesn't update itself. A guard fix made here reaches only the copies made after it, so each one is published as a [release](https://github.com/jimy-r/agent-workspace-starter/releases) that names the files to copy across. Watch this repository's releases (Watch → Custom → Releases) to hear about the next one.
+
 ## Customising
 
 - `CLAUDE.md` — replace the placeholders, trim what you don't use. Every line costs tokens on every turn; short is correct.
