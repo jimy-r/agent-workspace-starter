@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-This is a template repository. There's no running service and no version to track. Each fork or "Use this template" copy becomes its own independent workspace from the moment it's created, and a fix made here only reaches copies made afterward.
+This is a template repository with no running service, and a fork or "Use this template" copy becomes its own workspace the moment it's created and never updates itself after that. Fixes ship as tagged [releases](https://github.com/jimy-r/agent-workspace-starter/releases), each one naming the files an existing copy should take across. Watch releases to hear of them (Watch → Custom → Releases).
 
 ## What to report, and where
 
@@ -25,4 +25,4 @@ Private security advisories get a first response within a week. If you don't hea
 
 ---
 
-*Last verified against the repo structure on **2026-08-28**.*
+*Last verified against the repo structure on **2026-10-18**.*
