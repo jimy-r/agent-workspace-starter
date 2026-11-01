@@ -28,7 +28,7 @@ jobs:
       # generated from this template starts from the same fixed pin.
       # Dependabot (.github/dependabot.yml) still proposes upgrades, as PRs
       # that bump the SHA and this version comment together.
-      - uses: jimy-r/redaction-check-action@c626124f07c3dbf0f89764779ef920cf91f36135 # v1.1.1
+      - uses: jimy-r/redaction-check-action@20f30922d61f5412ec802460b50fde4598e66c0c # v1.1.2
 
   validate:
     runs-on: ubuntu-latest
